@@ -2,11 +2,14 @@
 # -*-coding:utf-8-*-
 
 # Copyright (c) 2014 lufo <lufo816@gmail.com>
-import lda
+from sklearn.decomposition import LatentDirichletAllocation
 import numpy as np
 import re
 import StopWords
 import scipy.stats
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.preprocessing import normalize
+
 
 stop_word_list = StopWords.stop_word_list
 
@@ -21,16 +24,21 @@ def text_parse(big_string):
     return [tok.lower() for tok in list_of_tokens if len(tok) > 2]
 
 
-def create_vocab_list():
+def create_vocab_list(df_in=None):
     """
     获得词汇表
     :return:列表，每个元素是一个词汇
     """
     vocab_list = []
-    with open('dict.txt') as dict:
-        vocab_list = [word.lower().strip() for word in dict if (word.lower().strip() + ' ' not in stop_word_list)]
-    return vocab_list
+    if df_in is None: 
+        with open('dict.txt') as dict:
+            vocab_list = [word.lower().strip() for word in dict if (word.lower().strip() + ' ' not in stop_word_list)]
+    else:
+        for index, row in df_in.iterrows():
+            vocab_list.extend(re.findall('\w+',row['Clean Tweet']))
 
+
+    return list(set(vocab_list))
 
 def normalize(mat):
     '''
@@ -109,40 +117,46 @@ def get_TRt(gamma, Pt, Et, iter=1000, tolerance=1e-16):
     return TRt
 
 
-def get_doc_list(samples):
+def get_doc_list(samples, df_in=None):
     """
     得到一个列表,每个元素为一片文档
     :param samples: 文档的个数
     :return: list,每个元素为一篇文档
     """
     doc_list = []
-    for i in xrange(1, samples + 1):
-        with open('tweet_cont/tweet_cont_%d.txt' % i) as fr:
-            temp = text_parse(fr.read())
-        word_list = [word.lower() for word in temp if (word + ' ' not in stop_word_list and not word.isspace())]
-        doc_list.append(word_list)
+    if df_in is None:
+        for i in range(1, samples + 1):
+            with open('tweet_cont/tweet_cont_%d.txt' % i) as fr:
+                temp = text_parse(fr.read())
+            word_list = [word.lower() for word in temp if (word + ' ' not in stop_word_list and not word.isspace())]
+            doc_list.append(word_list)
+    else:
+        doc_list = df_in.groupby('Author')['Clean Tweet'].apply(lambda x:' '.join(x)).values
     return doc_list
 
 
-def get_feature_matrix(doc_list, vocab_list):
+def get_feature_matrix(doc_list):
     """
     获得每篇文档的特征矩阵,每个词作为一个特征
     :param doc_list: list,每个元素为一篇文档
     :param vocab_list: list，词汇表，每个元素是一个词汇
     :return: i行j列list，i为样本数，j为特征数，feature_matrix_ij表示第i个样本中特征j出现的次数
     """
-    feature_matrix = []
+#    feature_matrix = []
     # word_index 为字典,每个 key 为单词,value 为该单词在 vocab_list 中的下标
-    word_index = {}
-    for i in xrange(len(vocab_list)):
-        word_index[vocab_list[i]] = i
-    for doc in doc_list:
-        temp = [0 for i in xrange(len(vocab_list))]
-        for word in doc:
-            if word in word_index:
-                temp[word_index[word]] += 1
-        feature_matrix.append(temp)
-    return feature_matrix
+#    word_index = {}
+#    for i in range(len(vocab_list)):
+#        word_index[vocab_list[i]] = i
+#    for doc in doc_list:
+#        temp = [0 for i in range(len(vocab_list))]
+#        for word in doc:
+#            if word in word_index:
+#                temp[word_index[word]] += 1
+#        feature_matrix.append(temp)
+
+    vectorizer = CountVectorizer()
+    feature_matrix = vectorizer.fit_transform(raw_documents=doc_list)
+    return feature_matrix, vectorizer
 
 
 def get_tweets_list():
@@ -240,7 +254,7 @@ def get_TR_sum(TR, samples, topics):
     return TR_sum
 
 
-def get_lda_model(samples, topics, n_iter):
+def get_lda_model(samples, topics, n_iter, df_in=None,):
     """
     获得训练后的 LDA 模型
     :param samples: 文档数
@@ -249,25 +263,34 @@ def get_lda_model(samples, topics, n_iter):
     :return: model,训练后的 LDA 模型
              vocab_list,列表，表示这些文档出现过的所有词汇，每个元素是一个词汇
     """
-    doc_list = get_doc_list(samples)
-    vocab_list = create_vocab_list()
-    feature_matrix = get_feature_matrix(doc_list, vocab_list)
-    model = lda.LDA(n_topics=topics, n_iter=n_iter)
-    model.fit(np.array(feature_matrix))
-    return model, vocab_list
+    doc_list = get_doc_list(samples,df_in)
+    #vocab_list = create_vocab_list(df_in)
+    term_frequency, vectorizer = get_feature_matrix(doc_list)
+    #feature_matrix = term_frequency.toarray()
+    vocab_list = vectorizer.get_feature_names()
+    model = LatentDirichletAllocation(n_components=topics,max_iter=n_iter)
+    model.fit(term_frequency)
+    return model, vocab_list, term_frequency
 
 
-def print_topics(model, vocab_list, n_top_words=5):
+def print_topics_as_df(model, vocab_list, n_top_words=5):
     """
     输出模型中每个 topic 对应的前 n 个单词
     :param model:  lda 模型
     :param vocab_list: 列表，表示这些文档出现过的所有词汇，每个元素是一个词汇
     """
-    topic_word = model.topic_word_
+#    topic_word = model.topic_word_
     # print 'topic_word',topic_word
-    for i, topic_dist in enumerate(topic_word):
-        topic_words = np.array(vocab_list)[np.argsort(topic_dist)][:-n_top_words:-1]
-        print('Topic {}: {}'.format(i + 1, ' '.join(topic_words)))
+#    for i, topic_dist in enumerate(topic_word):
+#        topic_words = np.array(vocab_list)[np.argsort(topic_dist)][:-n_top_words:-1]
+#        print('Topic {}: {}'.format(i + 1, ' '.join(topic_words)))
+
+    topic_word_df = pd.DataFrame(model.components_,columns=vocab_list)
+    sorted_topic_words = pd.DataFrame()
+    for index, row in topic_word_df.iterrows():
+        row_df = pd.DataFrame({'topic_'+str(index): row.sort_values(ascending=False).index[:5].values})
+        sorted_topic_words = pd.concat([sorted_topic_words,row_df],axis=1)
+    return sorted_topic_words
 
 
 def get_TR_using_DT(dt, samples, topics=5, gamma=0.2, tolerance=1e-16):
@@ -292,8 +315,8 @@ def get_TR_using_DT(dt, samples, topics=5, gamma=0.2, tolerance=1e-16):
     TR = get_TR(topics, samples, tweets_list, friends_tweets_list, row_normalized_dt, col_normalized_dt, relationship,
                 gamma, tolerance)
     for i in xrange(topics):
-        print TR[i]
-        print user[TR[i].index(max(TR[i]))]
+        print(TR[i])
+        print(user[TR[i].index(max(TR[i]))])
     TR_sum = get_TR_sum(TR, samples, topics)
     return TR, TR_sum
 
@@ -320,17 +343,17 @@ def using_lda_model_test_other_data(topics=5, n_iter=100, num_of_train_data=10, 
     :param tolerance: TRt迭代后 与迭代前欧氏距离小于tolerance时停止迭代
     """
     model, vocab_list = get_lda_model(samples=num_of_train_data, topics=topics, n_iter=n_iter)
-    dt = model.doc_topic_
+    dt = model.self._unnormalized_transform(X)
     print_topics(model, vocab_list, n_top_words=5)
     TR, TR_sum = get_TR_using_DT(dt, samples=num_of_train_data, topics=topics, gamma=gamma, tolerance=tolerance)
     doc_list = get_doc_list(samples=num_of_test_data)
-    feature_matrix = get_feature_matrix(doc_list, vocab_list)
+    feature_matrix = get_feature_matrix(doc_list)
     dt = get_doc_topic_distribution_using_lda_model(model, feature_matrix)
     # doc_user[i][j]表示第 i 个文本与第 j 个用户的相似度
     doc_user = np.dot(dt, TR)
     user = get_user_list()
     for i, doc in enumerate(doc_user):
-        print user[i], user[list(doc).index(max(doc))]
+        print(user[i], user[list(doc).index(max(doc))])
 
 
 def twitter_rank(topics=5, n_iter=100, samples=30, gamma=0.2, tolerance=1e-16):
@@ -343,18 +366,9 @@ def twitter_rank(topics=5, n_iter=100, samples=30, gamma=0.2, tolerance=1e-16):
     :param tolerance: TRt迭代后 与迭代前欧氏距离小于tolerance时停止迭代
     :return:
     """
-    model, vocab_list = get_lda_model(samples, topics, n_iter)
+    model, vocab_list, term_frequency = get_lda_model(samples, topics, n_iter)
     # topic_word为i行j列array，i为主题数，j为特征数，topic_word_ij表示第i个主题中特征j出现的比例
-    print_topics(model, vocab_list, n_top_words=5)
+    print_topics_as_df(model, vocab_list, n_top_words=5)
     # dt 矩阵代表文档的主题分布,dt[i][j]代表文档 i 中属于主题 j 的比重
-    dt = np.mat(model.doc_topic_)
+    dt = np.mat(model._unnormalized_transform(term_frequency))
     TR, TR_sum = get_TR_using_DT(dt, samples, topics, gamma, tolerance)
-
-
-def main():
-    twitter_rank()
-    # using_lda_model_test_other_data()
-
-
-if __name__ == '__main__':
-    main()
