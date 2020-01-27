@@ -9,6 +9,7 @@ import StopWords
 import scipy.stats
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.preprocessing import normalize
+import networkx as nx
 
 
 stop_word_list = StopWords.stop_word_list
@@ -137,10 +138,10 @@ def get_doc_list(samples, df_in=None):
 
 def get_feature_matrix(doc_list):
     """
-    获得每篇文档的特征矩阵,每个词作为一个特征
-    :param doc_list: list,每个元素为一篇文档
-    :param vocab_list: list，词汇表，每个元素是一个词汇
-    :return: i行j列list，i为样本数，j为特征数，feature_matrix_ij表示第i个样本中特征j出现的次数
+    Get the feature matrix of each document, each word as a feature
+    :param doc_list: list,Each element is a document
+    :return: i row and j column list, i is the number of samples, j is the number of features, and feature_matrix_ij represents the number of times that feature j appears in the i-th sample
+
     """
 #    feature_matrix = []
     # word_index 为字典,每个 key 为单词,value 为该单词在 vocab_list 中的下标
@@ -159,41 +160,29 @@ def get_feature_matrix(doc_list):
     return feature_matrix, vectorizer
 
 
-def get_tweets_list():
+def get_num_tweets_list(nx_graph,df_in):
     """
-    获取每个用户发过的 tweet 数量
-    :return: list,第 i 个元素为第 i 个用户发过的 tweet 数
+    Get the number of tweets per user
+    :return: list,The i element is the number of tweets from the i user
     """
-    tweets_list = []
-    with open('number_of_tweets.txt') as fr:
-        for line in fr.readlines():
-            tweets_list.append(int(line))
-    return tweets_list
+
+    return [df_in.groupby('Author').get_group(i)['Clean Tweet'].count() for i in list(G.nodes)]
+
+def get_relationship(nx_graph):
+    """
+    Get user relationship matrix
+    :param samples: Number of Users
+    :return: i row and j column, relationship [i] [j] = 1 means j follows i
+    """
+    return nx.to_scipy_sparse_matrix(nx_graph)
 
 
-def get_relationship(samples):
+def get_friends_tweets_list(relationship, tweets_list):
     """
-    得到用户关系矩阵
-    :param samples: 用户的个数
-    :return: i行j列,relationship[i][j]=1表示j关注i
-    """
-    relationship = []
-    for i in xrange(1, samples + 1):
-        with open('follower/follower_%d.txt' % i) as fr:
-            temp = []
-            for line in fr.readlines():
-                temp.append(int(line))
-        relationship.append(temp)
-    return relationship
-
-
-def get_friends_tweets_list(samples, relationship, tweets_list):
-    """
-    得到每个用户关注的所以用户发过的 tweet 数量之和
-    :param samples: 用户的个数
-    :param relationship: 用户关系矩阵,i行j列,relationship[i][j]=1表示j关注i
-    :param tweets_list: list,第 i 个元素为第 i 个用户发过的 tweet 数
-    :return: list,第 i 个元素为第 i 个用户关注的所有人发过的 tweet 数之和
+    Get the sum of the number of tweets that each user has followed
+    :param relationship: User relationship matrix, i rows and j columns, relationship [i] [j] = 1 means j follows i
+    :param tweets_list: list,The i element is the number of tweets from the i user
+    :return: list,The i element is the sum of the tweets from everyone i followed
     """
     friends_tweets_list = [0 for i in xrange(samples)]
     for j in xrange(samples):
@@ -205,8 +194,9 @@ def get_friends_tweets_list(samples, relationship, tweets_list):
 
 def get_user_list():
     """
-    获取用户 id 列表
-    :return: list,第 i 个元素为用户 i 的 id
+    Get list of user ids
+    :return: list,The i element is the id of user i
+
     """
     user = []
     with open('user_id.txt') as fr:
@@ -218,17 +208,17 @@ def get_user_list():
 def get_TR(topics, samples, tweets_list, friends_tweets_list, row_normalized_dt, col_normalized_dt, relationship,
            gamma=0.2, tolerance=1e-16):
     """
-    获取 TR 矩阵,代表每个主题下每个用户的影响力
-    :param topics: 主题数
-    :param samples: 用户数
-    :param tweets_list: list,第 i 个元素为第 i 个用户发过的 tweet 数
-    :param friends_tweets_list: list,第 i 个元素为第 i 个用户关注的所有人发过的 tweet 数之和
-    :param row_normalized_dt: dt 的行归一化矩阵
-    :param col_normalized_dt: dt 的列归一化矩阵
-    :param relationship: i行j列,relationship[i][j]=1表示j关注i
-    :param gamma: 获得 TRt 的公式中调节参数
-    :param tolerance: TRt迭代后 与迭代前欧氏距离小于tolerance时停止迭代
-    :return: list,TR[i][j]为第 i 个主题下用户 j 的影响力
+    Get a TR matrix that represents the influence of each user on each topic
+    :param topics: Number of topics
+    :param samples: User number
+    :param tweets_list: list,The i element is the number of tweets from the i user
+    :param friends_tweets_list: list,The i element is the sum of the tweets from everyone i followed
+    :param row_normalized_dt: dt Row normalization matrix
+    :param col_normalized_dt: dt Column normalization matrix
+    :param relationship: i row and j column, relationship [i] [j] = 1 means j follows i
+    :param gamma: Get the tuning parameters in the formula for TRt
+    :param tolerance: Stop iteration after TRt iteration when Euclidean distance from iteration is less than tolerance
+    :return: list,TR[i][j]Is the influence of user j on topic i
     """
     TR = []
     for i in xrange(topics):
@@ -237,6 +227,14 @@ def get_TR(topics, samples, tweets_list, friends_tweets_list, row_normalized_dt,
         TR.append(np.array(get_TRt(gamma, Pt, Et, tolerance)).reshape(-1, ).tolist())
     return TR
 
+def get_graph_object(df_in,source='Retweet of',target='Author',filter_column=None):
+    """
+    Get the network in the form of a networkx graph object
+    :param df_in: The raw dataframe with authors and tweets
+    return: network of authors as a networkx object with retweets as edges.
+    """
+
+    return nx.from_pandas_edgelist(df_in[df_in[filter_column].notna()],source,target)
 
 def get_TR_sum(TR, samples, topics):
     """
@@ -293,23 +291,22 @@ def print_topics_as_df(model, vocab_list, n_top_words=5):
     return sorted_topic_words
 
 
-def get_TR_using_DT(dt, samples, topics=5, gamma=0.2, tolerance=1e-16):
+def get_TR_using_DT(dt, df_in, samples, topics=5, gamma=0.2, tolerance=1e-16):
     """
-    已知 DT 矩阵得到 TR 矩阵
-    :param dt: dt 矩阵代表文档的主题分布,dt[i][j]代表文档 i 中属于主题 j 的比重
-    :param samples: 文档数
-    :param topics:  主题数
-    :param gamma: 获得 TRt 的公式中调节参数
-    :param tolerance: TRt迭代后 与迭代前欧氏距离小于tolerance时停止迭代
-    :return TR: list,TR[i][j]为第 i 个主题下用户 j 的影响力
-    :return TR_sum: list,有 i 个元素,TR_sum[i]为用户 i 在所有主题下影响力之和
+    Knowing the DT matrix gives the TR matrix
+    :param dt: dt The matrix represents the topic distribution of the document, and dt [i] [j] represents the proportion of the topic j in the document i
+    :param samples: Number of documents
+    :param topics:  Number of topics
+    :param gamma: Get the tuning parameters in the formula for TRt
+    :param tolerance: Stop iteration after TRt iteration when Euclidean distance from iteration is less than tolerance
+    :return TR: list,TR[i][j]Is the influence of user j on topic i
+    :return TR_sum: list,There are i elements, TR_sum [i] is the sum of influence of user i under all topics
     """
-    row_normalized_dt = normalize(dt)
-    # col_normalized_dt为dt每列归一化的转置，之所以取转置是为了取dt的归一化矩阵的每一行更方便
-    col_normalized_dt_array = np.array(normalize(dt.transpose()))
-    col_normalized_dt = col_normalized_dt_array.reshape(col_normalized_dt_array.shape).tolist()
-    tweets_list = get_tweets_list()
-    relationship = get_relationship(samples)
+    row_normalized_dt = dt/np.sum(dt,axis=0)
+    col_normalized_dt = dt/np.sum(dt,axis=1)
+    nx_graph = get_graph_object(df_in,filter_column='Retweet of')
+    relationship = get_relationship(nx_graph)
+    tweets_list = get_num_tweets_list(nx_graph,df_in)
     friends_tweets_list = get_friends_tweets_list(samples, relationship, tweets_list)
     user = get_user_list()
     TR = get_TR(topics, samples, tweets_list, friends_tweets_list, row_normalized_dt, col_normalized_dt, relationship,
@@ -356,7 +353,7 @@ def using_lda_model_test_other_data(topics=5, n_iter=100, num_of_train_data=10, 
         print(user[i], user[list(doc).index(max(doc))])
 
 
-def twitter_rank(topics=5, n_iter=100, samples=30, gamma=0.2, tolerance=1e-16):
+def twitter_rank(raw_df, topics=5, n_iter=100, samples=30, gamma=0.2, tolerance=1e-16):
     """
     对文档做twitter rank
     :param topics: 主题数
@@ -371,4 +368,4 @@ def twitter_rank(topics=5, n_iter=100, samples=30, gamma=0.2, tolerance=1e-16):
     print_topics_as_df(model, vocab_list, n_top_words=5)
     # dt 矩阵代表文档的主题分布,dt[i][j]代表文档 i 中属于主题 j 的比重
     dt = np.mat(model._unnormalized_transform(term_frequency))
-    TR, TR_sum = get_TR_using_DT(dt, samples, topics, gamma, tolerance)
+    TR, TR_sum = get_TR_using_DT(dt, raw_df, samples, topics, gamma, tolerance)
