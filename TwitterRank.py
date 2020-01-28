@@ -81,45 +81,36 @@ def normalize(mat):
 
 def get_sim(t, i, j, row_normalized_dt):
     '''
-    获得sim(i,j)
+    Get sim (i, j)
     '''
-    sim = 1.0 - abs(row_normalized_dt[i][t] - row_normalized_dt[j][t])
-    # 下列三行代码为使用 KL 散度衡量相似度
-    # pk = [row_normalized_dt[i][t]]
-    # qk = [row_normalized_dt[j][t]]
-    # sim = 1 - (scipy.stats.entropy(pk, qk) + scipy.stats.entropy(qk, pk)) / 2
+    sim = 1.0 - abs(row_normalized_dt[i,t] - row_normalized_dt[j,t])
+    
     return sim
 
 
-def get_Pt(t, samples, tweets_list, friends_tweets_list, row_normalized_dt, relationship):
+def get_Pt(t, tweets_list, friends_tweets_list, row_normalized_dt, relationship):
     '''
-    Get Pt, Pt [i] [j] means the probability that i follows j and i is affected by j under topic t
+    Get Pt, Pt [i] [j] is the probability that i follows j and i is affected by j under topic t
     '''
-    Pt = []
-    for i in xrange(samples):
-        friends_tweets = friends_tweets_list[i]
-        temp = []
-        for j in xrange(samples):
-            if relationship[j][i] == 1:
-                if friends_tweets != 0:
-                    temp.append(float(tweets_list[j]) / float(friends_tweets) * get_sim(t, i, j, row_normalized_dt))
-                else:
-                    temp.append(0.0)
-            else:
-                temp.append(0.0)
-        Pt.append(temp)
+    Pt = scipy.sparse.lil_matrix((relationship.get_shape()))
+    #rows,cols = relationship.nonzero()
+    #for row,col in zip(rows,cols):
+    #    Pt[row,col] = tweets_list[col]/friends_tweets_list[row] * get_sim(t, row, col, row_normalized_dt)
+    rel_c = relationship.tocoo()    
+    for i,j in zip(rel_c.row, rel_c.col):
+        Pt[i,j] = tweets_list[j]/friends_tweets_list[i] * get_sim(t, i, j, row_normalized_dt)
     return Pt
 
 
 def get_TRt(gamma, Pt, Et, iter=1000, tolerance=1e-16):
     '''
-    获得TRt，在t topic下每个用户的影响力矩阵
-    :param gamma: 获得 TRt 的公式中的调节参数
-    :param Pt: Pt 矩阵,Pt[i][j]表示i关注j，在主题t下i受到j影响的概率
-    :param Et: Et 矩阵,Et[i]代表用户 i 对主题 t 的关注度,已经归一化,所有元素相加为1
-    :param iter: 最大迭代数
-    :param tolerance: TRt迭代后 与迭代前欧氏距离小于tolerance时停止迭代
-    :return: TRt,TRt[i]代表在主题 t 下用户 i 的影响力
+    Get TRt, the influence matrix of each user under t topic
+    :param gamma: Get tuning parameters in TRt's formula
+    :param Pt: Pt Matrix, Pt [i] [j] represents the probability that i follows j, and i is affected by j under topic t
+    :param Et: Et Matrix, Et [i] represents user i's attention to topic t, has been normalized, all elements are added to 1
+    :param iter: Maximum number of iterations
+    :param tolerance: Stop iteration after TRt iteration when Euclidean distance from iteration is less than tolerance
+    :return: TRt,TRt[i]Represents the influence of user i under topic t
     '''
     TRt = np.mat(Et).transpose()
     old_TRt = TRt
@@ -136,23 +127,17 @@ def get_TRt(gamma, Pt, Et, iter=1000, tolerance=1e-16):
     return TRt
 
 
-def get_doc_list(samples, df_in=None):
+def get_doc_list(df_in):
     """
-    得到一个列表,每个元素为一片文档
-    :param samples: 文档的个数
-    :return: list,每个元素为一篇文档
+    Get a list, each element is a piece of document
+    :param samples: Number of documents
+    :return: np.array,Each element is a document
     """
-    doc_list = []
-    if df_in is None:
-        for i in range(1, samples + 1):
-            with open('tweet_cont/tweet_cont_%d.txt' % i) as fr:
-                temp = text_parse(fr.read())
-            word_list = [word.lower() for word in temp if (word + ' ' not in stop_word_list and not word.isspace())]
-            doc_list.append(word_list)
-    else:
-        doc_list = df_in.groupby('Author')['Clean Tweet'].apply(lambda x:' '.join(x)).values
+    doc_list = df_in.groupby('Author')['Clean Tweet'].apply(lambda x:' '.join(x)).values
     return doc_list
 
+def filter_raw_df(df_in):
+    return df_in[df_in['Retweet of'].isin(df_in['Author'].value_counts().index)]
 
 def get_feature_matrix(doc_list):
     """
@@ -161,18 +146,6 @@ def get_feature_matrix(doc_list):
     :return: i row and j column list, i is the number of samples, j is the number of features, and feature_matrix_ij represents the number of times that feature j appears in the i-th sample
 
     """
-#    feature_matrix = []
-    # word_index 为字典,每个 key 为单词,value 为该单词在 vocab_list 中的下标
-#    word_index = {}
-#    for i in range(len(vocab_list)):
-#        word_index[vocab_list[i]] = i
-#    for doc in doc_list:
-#        temp = [0 for i in range(len(vocab_list))]
-#        for word in doc:
-#            if word in word_index:
-#                temp[word_index[word]] += 1
-#        feature_matrix.append(temp)
-
     vectorizer = CountVectorizer()
     feature_matrix = vectorizer.fit_transform(raw_documents=doc_list)
     return feature_matrix, vectorizer
@@ -255,8 +228,8 @@ def get_graph_object(df_in,source='Retweet of',target='Author',filter_column=Non
     :param df_in: The raw dataframe with authors and tweets
     return: network of authors as a networkx object with retweets as edges.
     """
-    filtered_df_in = df_in[df_in['Retweet of'].isin(df_in['Author'].value_counts().index)]
-    G = nx.from_pandas_edgelist(filtered_df_in,source,target)
+    filtered_df = filter_raw_df(df_in) 
+    G = nx.from_pandas_edgelist(filtered_df,source,target)
     #G.remove_nodes_from([i for i in list(G.nodes()) if i not in df_in['Author'].values])
     return G
 
@@ -276,16 +249,16 @@ def get_TR_sum(TR, samples, topics):
     return TR_sum
 
 
-def get_lda_model(samples, topics, n_iter, df_in=None,):
+def get_lda_model(topics, n_iter, df_in=None):
     """
-    获得训练后的 LDA 模型
-    :param samples: 文档数
-    :param topics: 主题数
-    :param n_iter: 迭代数
-    :return: model,训练后的 LDA 模型
-             vocab_list,列表，表示这些文档出现过的所有词汇，每个元素是一个词汇
+    Get the trained LDA model
+    :param topics: Number of topics
+    :param n_iter: Number of iterations
+    :return: model,LDA model after training
+             vocab_list,A list of all words that have appeared in these documents, each element is a word
     """
-    doc_list = get_doc_list(samples,df_in)
+    filtered_df = filter_raw_df(df_in)
+    doc_list = get_doc_list(filtered_df)
     #vocab_list = create_vocab_list(df_in)
     term_frequency, vectorizer = get_feature_matrix(doc_list)
     #feature_matrix = term_frequency.toarray()
@@ -296,16 +269,6 @@ def get_lda_model(samples, topics, n_iter, df_in=None,):
 
 
 def print_topics_as_df(model, vocab_list, n_top_words=5):
-    """
-    输出模型中每个 topic 对应的前 n 个单词
-    :param model:  lda 模型
-    :param vocab_list: 列表，表示这些文档出现过的所有词汇，每个元素是一个词汇
-    """
-#    topic_word = model.topic_word_
-    # print 'topic_word',topic_word
-#    for i, topic_dist in enumerate(topic_word):
-#        topic_words = np.array(vocab_list)[np.argsort(topic_dist)][:-n_top_words:-1]
-#        print('Topic {}: {}'.format(i + 1, ' '.join(topic_words)))
 
     topic_word_df = pd.DataFrame(model.components_,columns=vocab_list)
     sorted_topic_words = pd.DataFrame()
@@ -377,19 +340,19 @@ def using_lda_model_test_other_data(topics=5, n_iter=100, num_of_train_data=10, 
         print(user[i], user[list(doc).index(max(doc))])
 
 
-def twitter_rank(raw_df, topics=5, n_iter=100, samples=30, gamma=0.2, tolerance=1e-16):
+def twitter_rank(raw_df, topics=5, n_iter=100, gamma=0.2, tolerance=1e-16):
     """
     对文档做twitter rank
     :param topics: 主题数
     :param n_iter: 迭代数
-    :param samples: 文档数
     :param gamma: 获得 TRt 的公式中调节参数
     :param tolerance: TRt迭代后 与迭代前欧氏距离小于tolerance时停止迭代
     :return:
     """
-    model, vocab_list, term_frequency = get_lda_model(samples, topics, n_iter)
+    model, vocab_list, term_frequency = get_lda_model(topics, n_iter, df_in)
     # topic_word为i行j列array，i为主题数，j为特征数，topic_word_ij表示第i个主题中特征j出现的比例
     print_topics_as_df(model, vocab_list, n_top_words=5)
-    # dt 矩阵代表文档的主题分布,dt[i][j]代表文档 i 中属于主题 j 的比重
+    #dt matrix represents the topic distribution of the document, 
+    #dt [i] [j] represents the proportion of the subject j in the document i
     dt = np.mat(model._unnormalized_transform(term_frequency))
     TR, TR_sum = get_TR_using_DT(dt, raw_df, samples, topics, gamma, tolerance)
