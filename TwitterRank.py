@@ -10,7 +10,25 @@ import scipy.stats
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.preprocessing import normalize
 import networkx as nx
+import time, sys
+from IPython.display import clear_output
 
+def update_progress(progress):
+    bar_length = 80
+    if isinstance(progress, int):
+        progress = float(progress)
+    if not isinstance(progress, float):
+        progress = 0
+    if progress < 0:
+        progress = 0
+    if progress >= 1:
+        progress = 1
+
+    block = int(round(bar_length * progress))
+
+    clear_output(wait = True)
+    text = "Progress: [{0}] {1:.1f}%".format( "#" * block + "-" * (bar_length - block), progress * 100)
+    print(text)
 
 stop_word_list = StopWords.stop_word_list
 
@@ -75,7 +93,7 @@ def get_sim(t, i, j, row_normalized_dt):
 
 def get_Pt(t, samples, tweets_list, friends_tweets_list, row_normalized_dt, relationship):
     '''
-    获得Pt,Pt[i][j]表示i关注j，在主题t下i受到j影响的概率
+    Get Pt, Pt [i] [j] means the probability that i follows j and i is affected by j under topic t
     '''
     Pt = []
     for i in xrange(samples):
@@ -165,8 +183,13 @@ def get_num_tweets_list(nx_graph,df_in):
     Get the number of tweets per user
     :return: list,The i element is the number of tweets from the i user
     """
-
-    return [df_in.groupby('Author').get_group(i)['Clean Tweet'].count() for i in list(G.nodes)]
+    authors = df_in['Author'].value_counts()
+    num_nodes = len(nx_graph)
+    num_tweets_list = np.zeros(shape=(num_nodes))
+    for ind,node in enumerate(nx_graph):
+        num_tweets_list[ind] = authors[node] 
+        update_progress(ind/num_nodes)
+    return num_tweets_list
 
 def get_relationship(nx_graph):
     """
@@ -184,11 +207,10 @@ def get_friends_tweets_list(relationship, tweets_list):
     :param tweets_list: list,The i element is the number of tweets from the i user
     :return: list,The i element is the sum of the tweets from everyone i followed
     """
-    friends_tweets_list = [0 for i in xrange(samples)]
-    for j in xrange(samples):
-        for i in xrange(samples):
-            if relationship[i][j] == 1:
-                friends_tweets_list[j] += tweets_list[i]
+    friends_tweets_list = np.zeros(shape=(relationship.get_shape()[0]))
+    for i in range(relationship.get_shape()[0]):
+        friends_tweets_list[i] = tweets_list[relationship[i].nonzero()[1]].sum()
+        update_progress(i / relationship.get_shape()[0])
     return friends_tweets_list
 
 
@@ -221,7 +243,7 @@ def get_TR(topics, samples, tweets_list, friends_tweets_list, row_normalized_dt,
     :return: list,TR[i][j]Is the influence of user j on topic i
     """
     TR = []
-    for i in xrange(topics):
+    for i in range(topics):
         Pt = get_Pt(i, samples, tweets_list, friends_tweets_list, row_normalized_dt, relationship)
         Et = col_normalized_dt[i]
         TR.append(np.array(get_TRt(gamma, Pt, Et, tolerance)).reshape(-1, ).tolist())
@@ -233,8 +255,10 @@ def get_graph_object(df_in,source='Retweet of',target='Author',filter_column=Non
     :param df_in: The raw dataframe with authors and tweets
     return: network of authors as a networkx object with retweets as edges.
     """
-
-    return nx.from_pandas_edgelist(df_in[df_in[filter_column].notna()],source,target)
+    filtered_df_in = df_in[df_in['Retweet of'].isin(df_in['Author'].value_counts().index)]
+    G = nx.from_pandas_edgelist(filtered_df_in,source,target)
+    #G.remove_nodes_from([i for i in list(G.nodes()) if i not in df_in['Author'].values])
+    return G
 
 def get_TR_sum(TR, samples, topics):
     """
@@ -307,9 +331,9 @@ def get_TR_using_DT(dt, df_in, samples, topics=5, gamma=0.2, tolerance=1e-16):
     nx_graph = get_graph_object(df_in,filter_column='Retweet of')
     relationship = get_relationship(nx_graph)
     tweets_list = get_num_tweets_list(nx_graph,df_in)
-    friends_tweets_list = get_friends_tweets_list(samples, relationship, tweets_list)
+    friends_tweets_list = get_friends_tweets_list(relationship, tweets_list)
     user = get_user_list()
-    TR = get_TR(topics, samples, tweets_list, friends_tweets_list, row_normalized_dt, col_normalized_dt, relationship,
+    TR = get_TR(topics, tweets_list, friends_tweets_list, row_normalized_dt, col_normalized_dt, relationship,
                 gamma, tolerance)
     for i in xrange(topics):
         print(TR[i])
