@@ -4,6 +4,7 @@
 # Copyright (c) 2014 lufo <lufo816@gmail.com>
 from sklearn.decomposition import LatentDirichletAllocation
 import numpy as np
+import pandas as pd
 import re
 import StopWords
 import scipy.stats
@@ -12,6 +13,8 @@ from sklearn.preprocessing import normalize
 import networkx as nx
 import time, sys
 from IPython.display import clear_output
+import ipywidgets as widgets
+
 
 def update_progress(progress):
     bar_length = 80
@@ -25,10 +28,11 @@ def update_progress(progress):
         progress = 1
 
     block = int(round(bar_length * progress))
+    
 
-    clear_output(wait = True)
     text = "Progress: [{0}] {1:.1f}%".format( "#" * block + "-" * (bar_length - block), progress * 100)
-    print(text)
+    out = widgets.Output()
+    out.append_stdout(text)
 
 stop_word_list = StopWords.stop_word_list
 
@@ -92,6 +96,7 @@ def get_Pt(t, tweets_list, friends_tweets_list, row_normalized_dt, relationship)
     '''
     Get Pt, Pt [i] [j] is the probability that i follows j and i is affected by j under topic t
     '''
+    print('Creating transition probability for topic {}'.format(t))
     Pt = scipy.sparse.lil_matrix((relationship.get_shape()))
     #rows,cols = relationship.nonzero()
     #for row,col in zip(rows,cols):
@@ -102,7 +107,7 @@ def get_Pt(t, tweets_list, friends_tweets_list, row_normalized_dt, relationship)
     return Pt
 
 
-def get_TRt(gamma, Pt, Et, iter=1000, tolerance=1e-16):
+def get_TRt(gamma, topic_number, Pt, Et, iter=1000, tolerance=1e-16):
     '''
     Get TRt, the influence matrix of each user under t topic
     :param gamma: Get tuning parameters in TRt's formula
@@ -112,14 +117,13 @@ def get_TRt(gamma, Pt, Et, iter=1000, tolerance=1e-16):
     :param tolerance: Stop iteration after TRt iteration when Euclidean distance from iteration is less than tolerance
     :return: TRt,TRt[i]Represents the influence of user i under topic t
     '''
-    TRt = np.mat(Et).transpose()
+    TRt = Et[:,topic_number]
     old_TRt = TRt
     i = 0
-    # np.linalg.norm(old_TRt,new_TRt)
+    print('Calculating influence scores for users under topic {}'.format(topic_number))
     while i < iter:
-        TRt = gamma * (np.dot(np.mat(Pt), TRt)) + (1 - gamma) * np.mat(Et).transpose()
+        TRt = gamma * (Pt*TRt) + (1 - gamma) * Et[:,topic_number]
         euclidean_dis = np.linalg.norm(TRt - old_TRt)
-        # print 'dis', dis
         if euclidean_dis < tolerance:
             break
         old_TRt = TRt
@@ -133,11 +137,9 @@ def get_doc_list(df_in):
     :param samples: Number of documents
     :return: np.array,Each element is a document
     """
+    print('Collecting grouped tweets by user')
     doc_list = df_in.groupby('Author')['Clean Tweet'].apply(lambda x:' '.join(x)).values
     return doc_list
-
-def filter_raw_df(df_in):
-    return df_in[df_in['Retweet of'].isin(df_in['Author'].value_counts().index)]
 
 def get_feature_matrix(doc_list):
     """
@@ -146,6 +148,7 @@ def get_feature_matrix(doc_list):
     :return: i row and j column list, i is the number of samples, j is the number of features, and feature_matrix_ij represents the number of times that feature j appears in the i-th sample
 
     """
+    print('Creating term-author matrix')
     vectorizer = CountVectorizer()
     feature_matrix = vectorizer.fit_transform(raw_documents=doc_list)
     return feature_matrix, vectorizer
@@ -156,6 +159,7 @@ def get_num_tweets_list(nx_graph,df_in):
     Get the number of tweets per user
     :return: list,The i element is the number of tweets from the i user
     """
+    print('Gathering tweet count for all users')
     authors = df_in['Author'].value_counts()
     num_nodes = len(nx_graph)
     num_tweets_list = np.zeros(shape=(num_nodes))
@@ -170,6 +174,7 @@ def get_relationship(nx_graph):
     :param samples: Number of Users
     :return: i row and j column, relationship [i] [j] = 1 means j follows i
     """
+    print('Creating relationship matrix')
     return nx.to_scipy_sparse_matrix(nx_graph)
 
 
@@ -180,6 +185,7 @@ def get_friends_tweets_list(relationship, tweets_list):
     :param tweets_list: list,The i element is the number of tweets from the i user
     :return: list,The i element is the sum of the tweets from everyone i followed
     """
+    print('Gathering tweet counts for friends of each user')
     friends_tweets_list = np.zeros(shape=(relationship.get_shape()[0]))
     for i in range(relationship.get_shape()[0]):
         friends_tweets_list[i] = tweets_list[relationship[i].nonzero()[1]].sum()
@@ -199,8 +205,13 @@ def get_user_list():
             user.append(line)
     return user
 
+def get_top_topic_influencers(TR, nx_graph, num_topics=5, num_influencers=10):
+    top_influencer_list = pd.DataFrame()
+    for i, TRt in enumerate(TR):
+        top_influencer_list['Topic' + str(i) + 'Influncers'] = pd.Series(TRt,index=nx_graph.nodes()).sort_values(ascending=False).head(num_influencers).index
+    return top_influencer_list
 
-def get_TR(topics, samples, tweets_list, friends_tweets_list, row_normalized_dt, col_normalized_dt, relationship,
+def get_TR(num_topics, tweets_list, friends_tweets_list, row_normalized_dt, col_normalized_dt, relationship,
            gamma=0.2, tolerance=1e-16):
     """
     Get a TR matrix that represents the influence of each user on each topic
@@ -215,22 +226,25 @@ def get_TR(topics, samples, tweets_list, friends_tweets_list, row_normalized_dt,
     :param tolerance: Stop iteration after TRt iteration when Euclidean distance from iteration is less than tolerance
     :return: list,TR[i][j]Is the influence of user j on topic i
     """
-    TR = []
-    for i in range(topics):
-        Pt = get_Pt(i, samples, tweets_list, friends_tweets_list, row_normalized_dt, relationship)
-        Et = col_normalized_dt[i]
-        TR.append(np.array(get_TRt(gamma, Pt, Et, tolerance)).reshape(-1, ).tolist())
+    print('Ranking users by ')
+    TR = np.zeros(shape=(num_topics,tweets_list.shape[0]))
+    for i in range(num_topics):
+        print('topic number {}'.format(i))
+        Pt = get_Pt(i, tweets_list, friends_tweets_list, row_normalized_dt, relationship)
+        Et = col_normalized_dt
+        TR[i] = get_TRt(gamma, i, Pt, Et, tolerance).flatten()
     return TR
 
-def get_graph_object(df_in,source='Retweet of',target='Author',filter_column=None):
+def get_graph_object(df_in,source='Author',target='Retweet of',filter_column=None):
     """
     Get the network in the form of a networkx graph object
     :param df_in: The raw dataframe with authors and tweets
     return: network of authors as a networkx object with retweets as edges.
     """
-    filtered_df = filter_raw_df(df_in) 
-    G = nx.from_pandas_edgelist(filtered_df,source,target)
-    #G.remove_nodes_from([i for i in list(G.nodes()) if i not in df_in['Author'].values])
+    print('Creating graph object')
+    G = nx.convert_matrix.from_pandas_edgelist(df_in,source,target)
+    print('Removing nodes where author doesn\'t exist in raw df')
+    G.remove_nodes_from(list(df_in['Retweet of'][~df_in['Retweet of'].isin(df_in['Author'].value_counts().index)].unique()))
     return G
 
 def get_TR_sum(TR, samples, topics):
@@ -257,12 +271,12 @@ def get_lda_model(topics, n_iter, df_in=None):
     :return: model,LDA model after training
              vocab_list,A list of all words that have appeared in these documents, each element is a word
     """
-    filtered_df = filter_raw_df(df_in)
-    doc_list = get_doc_list(filtered_df)
+    doc_list = get_doc_list(df_in)
     #vocab_list = create_vocab_list(df_in)
     term_frequency, vectorizer = get_feature_matrix(doc_list)
     #feature_matrix = term_frequency.toarray()
     vocab_list = vectorizer.get_feature_names()
+    print('Fitting LDA model to discover topics')
     model = LatentDirichletAllocation(n_components=topics,max_iter=n_iter)
     model.fit(term_frequency)
     return model, vocab_list, term_frequency
@@ -278,7 +292,7 @@ def print_topics_as_df(model, vocab_list, n_top_words=5):
     return sorted_topic_words
 
 
-def get_TR_using_DT(dt, df_in, samples, topics=5, gamma=0.2, tolerance=1e-16):
+def get_TR_using_DT(dt, df_in, num_topics=5, gamma=0.2, tolerance=1e-16):
     """
     Knowing the DT matrix gives the TR matrix
     :param dt: dt The matrix represents the topic distribution of the document, and dt [i] [j] represents the proportion of the topic j in the document i
@@ -289,20 +303,17 @@ def get_TR_using_DT(dt, df_in, samples, topics=5, gamma=0.2, tolerance=1e-16):
     :return TR: list,TR[i][j]Is the influence of user j on topic i
     :return TR_sum: list,There are i elements, TR_sum [i] is the sum of influence of user i under all topics
     """
-    row_normalized_dt = dt/np.sum(dt,axis=0)
-    col_normalized_dt = dt/np.sum(dt,axis=1)
+    row_normalized_dt = dt/(dt.sum(axis=1).reshape(-1,1))
+    col_normalized_dt = dt/dt.sum(axis=0)
     nx_graph = get_graph_object(df_in,filter_column='Retweet of')
     relationship = get_relationship(nx_graph)
     tweets_list = get_num_tweets_list(nx_graph,df_in)
     friends_tweets_list = get_friends_tweets_list(relationship, tweets_list)
-    user = get_user_list()
-    TR = get_TR(topics, tweets_list, friends_tweets_list, row_normalized_dt, col_normalized_dt, relationship,
+    #user = get_user_list()
+    TR = get_TR(num_topics, tweets_list, friends_tweets_list, row_normalized_dt, col_normalized_dt, relationship,
                 gamma, tolerance)
-    for i in xrange(topics):
-        print(TR[i])
-        print(user[TR[i].index(max(TR[i]))])
-    TR_sum = get_TR_sum(TR, samples, topics)
-    return TR, TR_sum
+    #TR_sum = get_TR_sum(TR, samples, num)
+    return TR, nx_graph #, TR_sum
 
 
 def get_doc_topic_distribution_using_lda_model(model, feature_matrix):
@@ -329,11 +340,10 @@ def using_lda_model_test_other_data(topics=5, n_iter=100, num_of_train_data=10, 
     model, vocab_list = get_lda_model(samples=num_of_train_data, topics=topics, n_iter=n_iter)
     dt = model.self._unnormalized_transform(X)
     print_topics(model, vocab_list, n_top_words=5)
-    TR, TR_sum = get_TR_using_DT(dt, samples=num_of_train_data, topics=topics, gamma=gamma, tolerance=tolerance)
+    TR, TR_sum = get_TR_using_DT(dt, topics=topics, gamma=gamma, tolerance=tolerance)
     doc_list = get_doc_list(samples=num_of_test_data)
     feature_matrix = get_feature_matrix(doc_list)
     dt = get_doc_topic_distribution_using_lda_model(model, feature_matrix)
-    # doc_user[i][j]表示第 i 个文本与第 j 个用户的相似度
     doc_user = np.dot(dt, TR)
     user = get_user_list()
     for i, doc in enumerate(doc_user):
@@ -349,10 +359,11 @@ def twitter_rank(raw_df, topics=5, n_iter=100, gamma=0.2, tolerance=1e-16):
     :param tolerance: TRt迭代后 与迭代前欧氏距离小于tolerance时停止迭代
     :return:
     """
-    model, vocab_list, term_frequency = get_lda_model(topics, n_iter, df_in)
-    # topic_word为i行j列array，i为主题数，j为特征数，topic_word_ij表示第i个主题中特征j出现的比例
+    model, vocab_list, term_frequency = get_lda_model(topics, n_iter, raw_df)
     print_topics_as_df(model, vocab_list, n_top_words=5)
     #dt matrix represents the topic distribution of the document, 
     #dt [i] [j] represents the proportion of the subject j in the document i
-    dt = np.mat(model._unnormalized_transform(term_frequency))
-    TR, TR_sum = get_TR_using_DT(dt, raw_df, samples, topics, gamma, tolerance)
+    dt = model._unnormalized_transform(term_frequency)
+    TR, graph_object = get_TR_using_DT(dt, raw_df, topics, gamma, tolerance)
+
+    return TR, graph_object
