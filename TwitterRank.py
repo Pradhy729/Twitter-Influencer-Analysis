@@ -1,4 +1,4 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 # -*-coding:utf-8-*-
 
 # Copyright (c) 2014 lufo <lufo816@gmail.com>
@@ -37,60 +37,24 @@ def update_progress(progress):
 stop_word_list = StopWords.stop_word_list
 
 
-def text_parse(big_string):
-    """
-    从字符串中提取处它的所有单词
-    :param big_string:字符串
-    :return:列表，所有的出现过的单词，可重复
-    """
-    list_of_tokens = re.split(r'\W*', big_string)
-    return [tok.lower() for tok in list_of_tokens if len(tok) > 2]
-
 
 def create_vocab_list(df_in=None):
     """
-    获得词汇表
-    :return:列表，每个元素是一个词汇
-    """
-    vocab_list = []
-    if df_in is None: 
-        with open('dict.txt') as dict:
-            vocab_list = [word.lower().strip() for word in dict if (word.lower().strip() + ' ' not in stop_word_list)]
-    else:
-        for index, row in df_in.iterrows():
-            vocab_list.extend(re.findall('\w+',row['Clean Tweet']))
+    Get the glossary
 
+    :return:List, each element is a word
+    """
+    for index, row in df_in.iterrows():
+        vocab_list.extend(re.findall('\w+',row['Clean Tweet']))
 
     return list(set(vocab_list))
-
-def normalize(mat):
-    '''
-    将矩阵每一行归一化(一范数为1)
-    :param mat: 矩阵
-    :return: list,行归一化的矩阵
-    '''
-    row_normalized_mat = []
-    for row_mat in mat:
-        normalized_row = []
-        row = np.array(row_mat).reshape(-1, ).tolist()
-        row_sum = sum(row)
-        for item in row:
-            if row_sum != 0:
-                normalized_row.append(float(item) / float(row_sum))
-            else:
-                normalized_row.append(0)
-        row_normalized_mat.append(normalized_row)
-    return row_normalized_mat
 
 
 def get_sim(t, i, j, row_normalized_dt):
     '''
     Get sim (i, j)
     '''
-    sim = 1.0 - abs(row_normalized_dt[i,t] - row_normalized_dt[j,t])
-    
-    return sim
-
+    return 1.0 - abs(row_normalized_dt[i,t] - row_normalized_dt[j,t])
 
 def get_Pt(t, tweets_list, friends_tweets_list, row_normalized_dt, relationship):
     '''
@@ -192,19 +156,6 @@ def get_friends_tweets_list(relationship, tweets_list):
         update_progress(i / relationship.get_shape()[0])
     return friends_tweets_list
 
-
-def get_user_list():
-    """
-    Get list of user ids
-    :return: list,The i element is the id of user i
-
-    """
-    user = []
-    with open('user_id.txt') as fr:
-        for line in fr.readlines():
-            user.append(line)
-    return user
-
 def get_top_topic_influencers(TR, nx_graph, num_topics=5, num_influencers=10):
     top_influencer_list = pd.DataFrame()
     for i, TRt in enumerate(TR):
@@ -247,22 +198,6 @@ def get_graph_object(df_in,source='Author',target='Retweet of',filter_column=Non
     G.remove_nodes_from(list(df_in['Retweet of'][~df_in['Retweet of'].isin(df_in['Author'].value_counts().index)].unique()))
     return G
 
-def get_TR_sum(TR, samples, topics):
-    """
-    获取总的 TR 矩阵,有 i 个元素,TR_sum[i]为用户 i 在所有主题下影响力之和
-    :param TR: list,TR[i][j]为第 i 个主题下用户 j 的影响力
-    :param samples: 用户数
-    :param topics: 主题数
-    :return: list,有 i 个元素,TR_sum[i]为用户 i 在所有主题下影响力之和
-    """
-    TR_sum = [0 for i in xrange(samples)]
-    for i in xrange(topics):
-        for j in xrange(samples):
-            TR_sum[j] += TR[i][j]
-    TR_sum.sort()
-    return TR_sum
-
-
 def get_lda_model(topics, n_iter, df_in=None):
     """
     Get the trained LDA model
@@ -300,8 +235,8 @@ def get_TR_using_DT(dt, df_in, num_topics=5, gamma=0.2, tolerance=1e-16):
     :param topics:  Number of topics
     :param gamma: Get the tuning parameters in the formula for TRt
     :param tolerance: Stop iteration after TRt iteration when Euclidean distance from iteration is less than tolerance
-    :return TR: list,TR[i][j]Is the influence of user j on topic i
-    :return TR_sum: list,There are i elements, TR_sum [i] is the sum of influence of user i under all topics
+    :return TR: matrix,TR[i][j]Is the influence of user j on topic i
+    :return nx_graph: A Networkx graph object where the nodes are authors and edges are retweets
     """
     row_normalized_dt = dt/(dt.sum(axis=1).reshape(-1,1))
     col_normalized_dt = dt/dt.sum(axis=0)
@@ -309,55 +244,19 @@ def get_TR_using_DT(dt, df_in, num_topics=5, gamma=0.2, tolerance=1e-16):
     relationship = get_relationship(nx_graph)
     tweets_list = get_num_tweets_list(nx_graph,df_in)
     friends_tweets_list = get_friends_tweets_list(relationship, tweets_list)
-    #user = get_user_list()
     TR = get_TR(num_topics, tweets_list, friends_tweets_list, row_normalized_dt, col_normalized_dt, relationship,
                 gamma, tolerance)
-    #TR_sum = get_TR_sum(TR, samples, num)
-    return TR, nx_graph #, TR_sum
-
-
-def get_doc_topic_distribution_using_lda_model(model, feature_matrix):
-    """
-    使用训练好的 LDA 模型得到新文档的主题分布
-    :param model: lda 模型
-    :param feature_matrix: i行j列list，i为样本数，j为特征数，feature_matrix[i][j]表示第i个样本中特征j出现的次数
-    :return:
-    """
-    return model.transform(np.array(feature_matrix), max_iter=100, tol=0)
-
-
-def using_lda_model_test_other_data(topics=5, n_iter=100, num_of_train_data=10, num_of_test_data=5, gamma=0.2,
-                                    tolerance=1e-16):
-    """
-    训练 LDA 模型然后用训练好的 LDA 模型得到新文档的主题然后找到在该文档所对应的主题中最有影响力的用户
-    :param topics:  LDA 主题数
-    :param n_iter:  LDA 模型训练迭代数
-    :param num_of_train_data: 训练集数据量
-    :param num_of_test_data: 测试集数据量
-    :param gamma: 获得 TRt 的公式中调节参数
-    :param tolerance: TRt迭代后 与迭代前欧氏距离小于tolerance时停止迭代
-    """
-    model, vocab_list = get_lda_model(samples=num_of_train_data, topics=topics, n_iter=n_iter)
-    dt = model.self._unnormalized_transform(X)
-    print_topics(model, vocab_list, n_top_words=5)
-    TR, TR_sum = get_TR_using_DT(dt, topics=topics, gamma=gamma, tolerance=tolerance)
-    doc_list = get_doc_list(samples=num_of_test_data)
-    feature_matrix = get_feature_matrix(doc_list)
-    dt = get_doc_topic_distribution_using_lda_model(model, feature_matrix)
-    doc_user = np.dot(dt, TR)
-    user = get_user_list()
-    for i, doc in enumerate(doc_user):
-        print(user[i], user[list(doc).index(max(doc))])
-
+    return TR, nx_graph
 
 def twitter_rank(raw_df, topics=5, n_iter=100, gamma=0.2, tolerance=1e-16):
     """
-    对文档做twitter rank
-    :param topics: 主题数
-    :param n_iter: 迭代数
-    :param gamma: 获得 TRt 的公式中调节参数
-    :param tolerance: TRt迭代后 与迭代前欧氏距离小于tolerance时停止迭代
-    :return:
+    Twitter rank of documents
+    :param topics: number of topics to discover
+    :param n_iter: max number of iterations for LDA model
+    :param gamma: The tuning parameters in the formula for TRt
+    :param tolerance: Tolerance for early stopping
+    :return:TR: A matrix of author influence scores for each topic. Rows are authors, columns are topics
+    :return:graph object: A Networkx graph object where the nodes are authors and edges are retweets 
     """
     model, vocab_list, term_frequency = get_lda_model(topics, n_iter, raw_df)
     print_topics_as_df(model, vocab_list, n_top_words=5)
