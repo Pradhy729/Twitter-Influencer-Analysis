@@ -1,7 +1,6 @@
 #!/usr/bin/python3
 # -*-coding:utf-8-*-
 
-# Copyright (c) 2014 lufo <lufo816@gmail.com>
 from sklearn.decomposition import LatentDirichletAllocation
 import numpy as np
 import pandas as pd
