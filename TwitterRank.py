@@ -1,12 +1,10 @@
 #!/usr/bin/python3
 # -*-coding:utf-8-*-
 
-# Copyright (c) 2014 lufo <lufo816@gmail.com>
 from sklearn.decomposition import LatentDirichletAllocation
 import numpy as np
 import pandas as pd
 import re
-import StopWords
 import scipy.stats
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.preprocessing import normalize
@@ -33,9 +31,6 @@ def update_progress(progress):
     text = "Progress: [{0}] {1:.1f}%".format( "#" * block + "-" * (bar_length - block), progress * 100)
     out = widgets.Output()
     out.append_stdout(text)
-
-stop_word_list = StopWords.stop_word_list
-
 
 
 def create_vocab_list(df_in=None):
@@ -265,4 +260,4 @@ def twitter_rank(raw_df, topics=5, n_iter=100, gamma=0.2, tolerance=1e-16):
     dt = model._unnormalized_transform(term_frequency)
     TR, graph_object = get_TR_using_DT(dt, raw_df, topics, gamma, tolerance)
 
-    return TR, graph_object
+    return TR, graph_object, model, vocab_list
