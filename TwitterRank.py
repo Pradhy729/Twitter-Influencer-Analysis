@@ -124,7 +124,7 @@ def get_num_tweets_list(nx_graph,df_in):
     num_tweets_list = np.zeros(shape=(num_nodes))
     for ind,node in enumerate(nx_graph):
         num_tweets_list[ind] = authors[node] 
-        update_progress(ind/num_nodes)
+        #update_progress(ind/num_nodes)
     return num_tweets_list
 
 def get_relationship(nx_graph):
@@ -254,7 +254,6 @@ def twitter_rank(raw_df, topics=5, n_iter=100, gamma=0.2, tolerance=1e-16):
     :return:graph object: A Networkx graph object where the nodes are authors and edges are retweets 
     """
     model, vocab_list, term_frequency = get_lda_model(topics, n_iter, raw_df)
-    print_topics_as_df(model, vocab_list, n_top_words=5)
     #dt matrix represents the topic distribution of the document, 
     #dt [i] [j] represents the proportion of the subject j in the document i
     dt = model._unnormalized_transform(term_frequency)
